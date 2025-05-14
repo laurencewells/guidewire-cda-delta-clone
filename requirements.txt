@@ -1,0 +1,4 @@
+ray[default]==2.45.0
+deltalake==0.25.1
+pyarrow==18.1.0
+pytest==8.3.5
