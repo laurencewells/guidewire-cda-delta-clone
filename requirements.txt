@@ -1,4 +1,4 @@
 ray[default]==2.45.0
-deltalake==0.25.1
+deltalake==1.1.0
 pyarrow==18.1.0
 pytest==8.3.5

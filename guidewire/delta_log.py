@@ -1,5 +1,7 @@
-from deltalake.writer import AddAction
-import deltalake._internal as i
+from deltalake.transaction import AddAction, create_table_with_add_actions
+from deltalake.exceptions import TableNotFoundError
+from deltalake.schema import Schema
+from deltalake import DeltaTable
 import pyarrow as pa
 import pyarrow.compute as pc
 from guidewire.logging import logger as L
@@ -49,7 +51,7 @@ class DeltaLog:
         if not all([storage_account, storage_container, table_name]):
             raise DeltaValidationError("All parameters must be non-empty strings")
             
-        self.delta_log: Optional[i.RawDeltaTable] = None
+        self.delta_log: Optional[DeltaTable] = None
         #add optionalsubfoler 
         self.subfolder = subfolder
         if subfolder:
@@ -66,12 +68,12 @@ class DeltaLog:
     def _log_exists(self) -> None:
         """Check if the Delta log exists and initialize it if found."""
         try:
-            self.delta_log = i.RawDeltaTable(
+            self.delta_log = DeltaTable(
                 table_uri=self.log_uri, storage_options=self.storage_options
             )
         except Exception as e:
             #If its a file not found error, that is ok
-            if isinstance(e, i.TableNotFoundError):
+            if isinstance(e, TableNotFoundError):
                 L.info(f"Log does not exist for {self.table_name}: {e}")
             else:
                 L.error(f"Error reading log for {self.table_name}: {e}")
@@ -255,13 +257,14 @@ class DeltaLog:
             )
 
         try:
+            schema = Schema.from_arrow(schema)
             if self.delta_log is None:
                 L.info("Creating new table")
-                i.write_new_deltalake(
+                create_table_with_add_actions(
                     table_uri=self.log_uri,
                     schema=schema,
                     add_actions=actions,
-                    _mode="overwrite",
+                    mode="overwrite",
                     partition_by=[],
                     name=self.table_name,
                     storage_options=self.storage_options,
