@@ -3,7 +3,7 @@ from pyarrow.fs import FileType
 from guidewire.logging import logger as L
 from guidewire.delta_log import DeltaLog
 from guidewire.manifest import Manifest
-
+from typing import Optional
 
 class Batch:
     def __init__(
@@ -13,6 +13,7 @@ class Batch:
         storage_account: str,
         storage_container: str,
         reset: bool = False,
+        subfolder: Optional[str] = None,
     ):
         """Initialize a new Batch instance.
         
@@ -22,7 +23,7 @@ class Batch:
             storage_account: Azure storage account name
             storage_container: Azure storage container name
             reset: Whether to reset the processing state
-            
+            subfolder: Optional subfolder to process
         Raises:
             ValueError: If required parameters are invalid
         """
@@ -41,6 +42,7 @@ class Batch:
             storage_account=storage_account,
             storage_container=storage_container,
             table_name=self.table_name,
+            subfolder=subfolder,
         )
         self.low_watermark = 0 if reset else self.log_entry.get_latest_timestamp()
         if reset:
@@ -95,7 +97,7 @@ class Batch:
                 "size": file.size,
             }
             for file in self.manifest.fs.get_file_info(directory)
-            if file.type == FileType.File
+            if file.type == FileType.File and file.path.endswith(".parquet")
         ]
 
     def _get_paquet_schema(self, path: str) -> pa.schema:

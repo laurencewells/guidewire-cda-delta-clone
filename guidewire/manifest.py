@@ -37,7 +37,7 @@ class Manifest:
             ValueError: If the manifest file is invalid or missing required tables
             Exception: For other unexpected errors
         """
-        manifest_path = os.path.join(self.location, "manifest.json")
+        manifest_path = f"{self.location}/manifest.json"
         try:
             L.info(f"Attempting to read manifest file from {manifest_path}")
             table = self.fs.read_json(manifest_path)

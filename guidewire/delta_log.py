@@ -34,6 +34,7 @@ class DeltaLog:
         storage_account: str,
         storage_container: str,
         table_name: str,
+        subfolder: Optional[str] = None,
     ) -> None:
         """Initialize the DeltaLog instance.
         
@@ -49,10 +50,16 @@ class DeltaLog:
             raise DeltaValidationError("All parameters must be non-empty strings")
             
         self.delta_log: Optional[i.RawDeltaTable] = None
-        self.log_uri = f"abfss://{storage_container}@{storage_account}.dfs.core.windows.net/{table_name}/"
+        #add optionalsubfoler 
+        self.subfolder = subfolder
+        if subfolder:
+            self.log_uri = f"abfss://{storage_container}@{storage_account}.dfs.core.windows.net/{subfolder}/{table_name}/"
+            self.check_point_path = f"{storage_container}/{subfolder}/{table_name}/{self.CHECKPOINT_DIR}"
+        else:
+            self.log_uri = f"abfss://{storage_container}@{storage_account}.dfs.core.windows.net/{table_name}/"
+            self.check_point_path = f"{storage_container}/{table_name}/{self.CHECKPOINT_DIR}"
         self.table_name = table_name
         self.fs = Storage(cloud="azure")
-        self.check_point_path = f"{storage_container}/{table_name}/{self.CHECKPOINT_DIR}"
         self.storage_options = self.fs._storage_options
         self._log_exists()
 

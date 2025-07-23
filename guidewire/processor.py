@@ -26,6 +26,7 @@ class Processor:
         self.log_storage_account = os.environ["AZURE_STORAGE_ACCOUNT_NAME"]
         self.log_storage_container = os.environ["AZURE_STORAGE_ACCOUNT_CONTAINER"]
         self.manifest_location = os.environ["AWS_MANIFEST_LOCATION"]
+        self.subfolder = os.environ.get("AZURE_STORAGE_SUBFOLDER")
         self.manifest = Manifest(
             location=self.manifest_location,
             table_names=self.table_names
@@ -51,7 +52,7 @@ class Processor:
 
     @staticmethod
     @ray.remote
-    def process_table_async(entry: str, manifest: Manifest, log_storage_account: str, log_storage_container: str) -> None:
+    def process_table_async(entry: str, manifest: Manifest, log_storage_account: str, log_storage_container: str, subfolder: str = None) -> None:
         """
         Process a single table entry using Ray distributed computing.
         
@@ -70,6 +71,7 @@ class Processor:
                     manifest=manifest,
                     storage_account=log_storage_account,
                     storage_container=log_storage_container,
+                    subfolder=subfolder,
                 ).process_batch()
                 L.info(f"Successfully processed table: {entry}")
             else:
@@ -79,7 +81,7 @@ class Processor:
             raise
         
     @staticmethod
-    def process_table(entry: str, manifest: Manifest, log_storage_account: str, log_storage_container: str) -> None:
+    def process_table(entry: str, manifest: Manifest, log_storage_account: str, log_storage_container: str, subfolder: str = None) -> None:
         """
         Process a single table entry using Ray distributed computing.
         
@@ -98,6 +100,7 @@ class Processor:
                     manifest=manifest,
                     storage_account=log_storage_account,
                     storage_container=log_storage_container,
+                    subfolder=subfolder,
                 ).process_batch()
                 L.info(f"Successfully processed table: {entry}")
             else:
@@ -115,7 +118,7 @@ class Processor:
                 ray.init(ignore_reinit_error=True, log_to_driver=True)
                 # Process tables in parallel
                 futures = [
-                    self.process_table_async.remote(entry, self.manifest, self.log_storage_account, self.log_storage_container)
+                    self.process_table_async.remote(entry, self.manifest, self.log_storage_account, self.log_storage_container, self.subfolder)
                     for entry in self.table_names
                 ]
                 # Wait for all tasks to complete
@@ -124,7 +127,7 @@ class Processor:
             else:
                 # Process tables sequentially
                 for entry in self.table_names:
-                    self.process_table(entry, self.manifest, self.log_storage_account, self.log_storage_container)
+                    self.process_table(entry, self.manifest, self.log_storage_account, self.log_storage_container, self.subfolder)
             L.info("Processed successfully")
         except Exception as e:
             L.error(f"Application error: {str(e)}")

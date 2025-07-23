@@ -123,6 +123,9 @@ OR
 AZURE_TENANT_ID = <your-tenant-id>
 AZURE_CLIENT_ID= <your-client-id>
 AZURE_CLIENT_SECRET= <your-secret>
+Optional
+AZURE_STORAGE_SUBFOLDER = <azure-sub-folder>
+AWS_ENDPOINT_URL = <aws-endpoint-overwrite>
 ```
 
 ## Key Components

@@ -61,15 +61,26 @@ class Storage:
             region = os.environ.get("AWS_REGION")
             access_key = os.environ.get("AWS_ACCESS_KEY_ID")
             secret_key = os.environ.get("AWS_SECRET_ACCESS_KEY")
+            endpoint = os.environ.get("AWS_ENDPOINT_URL")
             
             if not all([region, access_key, secret_key]):
                 raise KeyError("AWS_REGION, AWS_ACCESS_KEY_ID, and AWS_SECRET_ACCESS_KEY must be set")
-                
-            self.filesystem = pa_fs.S3FileSystem(
-                region=region,
-                access_key=access_key,
-                secret_key=secret_key,
-            )
+            if endpoint:
+                L.info(f"Using custom endpoint {endpoint} for AWS S3")
+                self.filesystem = pa_fs.S3FileSystem(
+                    region=region,
+                    access_key=access_key,
+                    secret_key=secret_key,
+                    endpoint_override=endpoint,
+                )  
+            else:
+                L.info("Using default AWS S3 endpoint")
+                self.filesystem = pa_fs.S3FileSystem(
+                    region=region,
+                    access_key=access_key,
+                    secret_key=secret_key,
+                )
+
         else:
             raise ValueError(f"Invalid cloud provider: {cloud}")
 
