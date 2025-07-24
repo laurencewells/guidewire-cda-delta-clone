@@ -272,7 +272,7 @@ class DeltaLog:
             else:
                 L.info("Adding to table")
                 self.delta_log.create_write_transaction(
-                    add_actions=actions, mode=mode, schema=schema, partition_by=[]
+                    actions=actions, mode=mode, schema=schema, partition_by=[]
                 )
         except Exception as e:
             L.error(f"Failed to add transaction for {self.table_name}: {e}")
