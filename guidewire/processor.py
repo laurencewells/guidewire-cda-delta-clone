@@ -9,7 +9,7 @@ from guidewire.logging import logger as L
 class Processor:
     """A class to handle table processing operations."""
     
-    def __init__(self, table_names: Tuple[str, ...] = None, parallel: bool = True):
+    def __init__(self, table_names: Tuple[str, ...] = None, parallel: bool = True, exceptions: list = None) -> None:
         """I
         Initialize the Processor with table names and parallel processing.
         if table_names is not provided, all tables in the manifest will be processed.
@@ -21,6 +21,7 @@ class Processor:
             parallel: Whether to process tables in parallel using Ray (default: True)
         """
         self.table_names = table_names
+        self.exceptions = exceptions
         self.parallel = parallel
         self._validate_environment()
         self.log_storage_account = os.environ["AZURE_STORAGE_ACCOUNT_NAME"]
@@ -33,6 +34,8 @@ class Processor:
         )
         if self.table_names is None:
             self.table_names = self.manifest.get_table_names()
+            if exceptions is not None:
+                self.table_names = [name for name in self.table_names if name not in exceptions]
         if self.table_names is None:
             raise ValueError("Table names must be provided")
 
@@ -131,4 +134,5 @@ class Processor:
             L.info("Processed successfully")
         except Exception as e:
             L.error(f"Application error: {str(e)}")
+            ray.shutdown()
             raise

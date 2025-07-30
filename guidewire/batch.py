@@ -44,7 +44,7 @@ class Batch:
             table_name=self.table_name,
             subfolder=subfolder,
         )
-        self.low_watermark = 0 if reset else self.log_entry.get_latest_timestamp()
+        self.low_watermark = 0 if reset else self.log_entry._get_watermark_from_log()
         if reset:
             self.log_entry.remove_log()
 
@@ -64,9 +64,9 @@ class Batch:
 
         for schema_file_info in file_list:
             file_path_to_try = schema_file_info["relative_path"]
-            L.info(f"    Attempting to read schema from: {file_path_to_try}")
+            L.info(f"Attempting to read schema from: {file_path_to_try}")
             try:
-                self.cached_schema = self._get_paquet_schema(file_path_to_try)
+                self.cached_schema = self._get_parquet_schema(file_path_to_try)
                 L.info(
                     f"Successfully determined schema for '{self.table_name}' using file: {file_path_to_try}"
                 )
@@ -100,7 +100,7 @@ class Batch:
             if file.type == FileType.File and file.path.endswith(".parquet")
         ]
 
-    def _get_paquet_schema(self, path: str) -> pa.schema:
+    def _get_parquet_schema(self, path: str) -> pa.schema:
         """Reads and returns the schema from a parquet file.
         
         Args:
@@ -131,6 +131,11 @@ class Batch:
 
         first_folder_for_schema = True
         for timestamp_folder in timestamp_folders:
+            try:
+                timestamp_value = int(timestamp_folder.split("/")[-1])
+            except ValueError:
+                L.warning(f"Skipping non-numeric timestamp folder: {timestamp_folder}")
+                continue
             L.info(f"  Checking timestamp path: {timestamp_folder}")
             try:
                 files_in_timestamp = self._get_parquet_list(timestamp_folder)
@@ -144,6 +149,7 @@ class Batch:
                     self.log_entry.add_transaction(
                         parquets=files_in_timestamp,
                         schema=self.cached_schema,
+                        watermark=timestamp_value,
                         mode="overwrite",
                     )
                 else:
@@ -153,14 +159,20 @@ class Batch:
                 self.log_entry.add_transaction(
                     parquets=files_in_timestamp,
                     schema=self.cached_schema,
+                    watermark=timestamp_value,
                     mode="append",
                 )
 
     def process_batch(self):
         """Processes the batch for the current table."""
+        if self.low_watermark == -1:
+            L.error(
+                f"Skipping batch for {self.table_name} as the low watermark is -1, indicating somethings gone wrong."
+            )
+            return
         if int(self.entry["lastSuccessfulWriteTimestamp"]) <= self.low_watermark:
             L.warning(
-                f"Skipping batch for {self.table_name} as it is older than the low watermark."
+                f"Skipping batch for {self.table_name} as it matches or is older than the low watermark."
             )
             return
 
@@ -185,7 +197,7 @@ class Batch:
             for folder in schema_history_list_uris:
                 L.info(f"Processing URI: {folder} for entry {self.table_name}")
                 self._process_schema_history_uri(folder)
-            self.log_entry.write_checkpoint(int(self.entry["lastSuccessfulWriteTimestamp"]))
+            #self.log_entry.write_checkpoint(int(self.entry["lastSuccessfulWriteTimestamp"]))
         except Exception as e:
             L.error(f"Error processing schema history for {self.table_name}: {e} processing abandoned")
             raise

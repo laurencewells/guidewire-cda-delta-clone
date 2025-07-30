@@ -1,9 +1,8 @@
-from deltalake.transaction import AddAction, create_table_with_add_actions
+from deltalake.transaction import AddAction, create_table_with_add_actions,CommitProperties
 from deltalake.exceptions import TableNotFoundError
 from deltalake.schema import Schema
 from deltalake import DeltaTable
 import pyarrow as pa
-import pyarrow.compute as pc
 from guidewire.logging import logger as L
 from guidewire.storage import Storage
 from typing import List, Dict, Optional, Union, Literal
@@ -153,25 +152,25 @@ class DeltaLog:
             L.error(f"Error reading checkpoint for {self.table_name}: {e}")
             return None
 
-    def get_latest_timestamp(self) -> int:
-        """Get the latest timestamp from the checkpoint.
+    # def get_latest_timestamp(self) -> int:
+    #     """Get the latest timestamp from the checkpoint.
         
-        Returns:
-            int: The latest timestamp, or 0 if no checkpoint exists
-        """
-        #fail if there is an error reading the checkpoint
-        try:
-            checkpoint = self._read_checkpoint()
-        except Exception as e:
-            L.error(f"Error reading checkpoint for {self.table_name}: {e}")
-            raise DeltaError(f"Error reading checkpoint: {e}")
-        if not checkpoint:
-            return 0
-        try:
-            return pc.max(checkpoint["elt_timestamp"]).as_py()
-        except Exception as e:
-            L.error(f"Error retrieving latest timestamp for {self.table_name}: {e}")
-            return 0
+    #     Returns:
+    #         int: The latest timestamp, or 0 if no checkpoint exists
+    #     """
+    #     #fail if there is an error reading the checkpoint
+    #     try:
+    #         checkpoint = self._read_checkpoint()
+    #     except Exception as e:
+    #         L.error(f"Error reading checkpoint for {self.table_name}: {e}")
+    #         raise DeltaError(f"Error reading checkpoint: {e}")
+    #     if not checkpoint:
+    #         return 0
+    #     try:
+    #         return pc.max(checkpoint["elt_timestamp"]).as_py()
+    #     except Exception as e:
+    #         L.error(f"Error retrieving latest timestamp for {self.table_name}: {e}")
+    #         return 0
 
     def remove_log(self) -> bool:
         """Remove the Delta log.
@@ -186,18 +185,6 @@ class DeltaLog:
             L.error(f"Failed to remove log for {self.table_name}: {e}")
             return False
 
-    def remove_checkpoint(self) -> bool:
-        """Remove the checkpoint file.
-        
-        Returns:
-            bool: True if successful, False otherwise
-        """
-        try:
-            self.fs.delete_file(path=self.check_point_path)
-            return True
-        except Exception as e:
-            L.error(f"Failed to remove checkpoint for {self.table_name}: {e}")
-            return False
 
     def _validate_parquet_info(self, parquet: Dict[str, Union[str, int]]) -> None:
         """Validate parquet file information.
@@ -218,11 +205,32 @@ class DeltaLog:
         if not isinstance(parquet["last_modified"], int) or parquet["last_modified"] <= 0:
             raise DeltaValidationError("Last modified timestamp must be a positive integer")
 
+    def _get_watermark_from_log(self) -> int:
+        """Get the latest watermark from the Delta log.
+
+        Returns:
+            int: The latest timestamp, or 0 if no log exists
+        """
+        if not self.table_exists():
+            return 0
+        try:
+            #get the commit properties from the latest transaction
+            watermark = int(self.delta_log.history(1)[0]["watermark"])
+            #TODO Add a test here
+            if watermark is None:
+                L.error(f"Watermark is None for {self.table_name}")
+                return -1
+            return watermark
+        except Exception as e:
+            L.error(f"Error retrieving latest timestamp from log for {self.table_name}: {e}")
+            return -1
+
     def add_transaction(
         self, 
         parquets: List[Dict[str, Union[str, int]]], 
         schema: pa.Schema, 
-        mode: Literal["append", "overwrite"] = DEFAULT_MODE
+        watermark: int,
+        mode: Literal["append", "overwrite"] = DEFAULT_MODE,
     ) -> None:
         """Add a transaction to the Delta log.
         
@@ -240,7 +248,7 @@ class DeltaLog:
             
         if not parquets:
             raise DeltaValidationError("At least one parquet file must be provided")
-            
+
         self._log_exists()
         actions = []
         for file in parquets:
@@ -258,8 +266,9 @@ class DeltaLog:
 
         try:
             schema = Schema.from_arrow(schema)
+            commit_properties = CommitProperties(custom_metadata={"watermark": str(watermark)})
             if self.delta_log is None:
-                L.info("Creating new table")
+                L.info(f"Creating new table: {self.table_name}")
                 create_table_with_add_actions(
                     table_uri=self.log_uri,
                     schema=schema,
@@ -268,11 +277,14 @@ class DeltaLog:
                     partition_by=[],
                     name=self.table_name,
                     storage_options=self.storage_options,
+                    commit_properties= commit_properties
+
                 )
             else:
-                L.info("Adding to table")
+                L.info(f"Adding to table: {self.table_name} - watermark: {watermark}")
                 self.delta_log.create_write_transaction(
-                    actions=actions, mode=mode, schema=schema, partition_by=[]
+                    actions=actions, mode=mode, schema=schema, partition_by=[],
+                    commit_properties=commit_properties
                 )
         except Exception as e:
             L.error(f"Failed to add transaction for {self.table_name}: {e}")
