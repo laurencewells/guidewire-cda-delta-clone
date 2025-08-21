@@ -1,4 +1,4 @@
-from time import time
+from time import sleep
 from deltalake.transaction import AddAction, create_table_with_add_actions,CommitProperties
 from deltalake.exceptions import TableNotFoundError
 from deltalake.schema import Schema
@@ -233,7 +233,7 @@ class DeltaLog:
                 )
                 except:
                     L.warning(f"Failed to update delta log for {self.table_name} after transaction, sleeping for some time")
-                    time.sleep(5)
+                    sleep(10)
         except Exception as e:
             L.error(f"Failed to add transaction for {self.table_name}: {e}")
             raise DeltaError(f"Failed to add transaction: {e}")
