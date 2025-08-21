@@ -55,10 +55,8 @@ class DeltaLog:
         self.subfolder = subfolder
         if subfolder:
             self.log_uri = f"abfss://{storage_container}@{storage_account}.dfs.core.windows.net/{subfolder}/{table_name}/"
-            self.check_point_path = f"{storage_container}/{subfolder}/{table_name}/{self.CHECKPOINT_DIR}"
         else:
             self.log_uri = f"abfss://{storage_container}@{storage_account}.dfs.core.windows.net/{table_name}/"
-            self.check_point_path = f"{storage_container}/{table_name}/{self.CHECKPOINT_DIR}"
         self.table_name = table_name
         self.fs = Storage(cloud="azure")
         self.storage_options = self.fs._storage_options
@@ -107,70 +105,6 @@ class DeltaLog:
         except Exception as e:
             raise DeltaError(f"Failed to get table stats: {e}")
 
-    def write_checkpoint(self, timestamp: int) -> None:
-        """Write a checkpoint with the given timestamp.
-        
-        Args:
-            timestamp: The timestamp to write to the checkpoint
-            
-        Raises:
-            DeltaValidationError: If timestamp is not provided or is not an integer
-            DeltaError: If writing the checkpoint fails
-        """
-        if not timestamp:
-            L.error("Timestamp is required to write checkpoint")
-            raise DeltaValidationError("Timestamp is required to write checkpoint")
-        if not isinstance(timestamp, int):
-            L.error("Timestamp must be an integer")
-            raise DeltaValidationError("Timestamp must be an integer")
-            
-        log = {"elt_timestamp": [timestamp]}
-
-        current_table = self._read_checkpoint()
-        try:
-            if not current_table:
-                self.fs.write_parquet(self.check_point_path, pa.table(log))
-            else:
-                final_table = pa.concat_tables([current_table, pa.table(log)])
-                self.fs.write_parquet(self.check_point_path, final_table)
-        except Exception as e:
-            L.error(f"Failed to write checkpoint for {self.table_name}: {e}")
-            raise DeltaError(f"Failed to write checkpoint: {e}")
-
-    def _read_checkpoint(self) -> Optional[pa.Table]:
-        """Read the checkpoint file if it exists.
-        
-        Returns:
-            Optional[pa.Table]: The checkpoint data as a PyArrow table, or None if not found
-        """
-        try:
-            return self.fs.read_parquet(self.check_point_path)
-        except FileNotFoundError:
-            L.info(f"Checkpoint does not exist for {self.table_name}")
-            return None
-        except Exception as e:
-            L.error(f"Error reading checkpoint for {self.table_name}: {e}")
-            return None
-
-    # def get_latest_timestamp(self) -> int:
-    #     """Get the latest timestamp from the checkpoint.
-        
-    #     Returns:
-    #         int: The latest timestamp, or 0 if no checkpoint exists
-    #     """
-    #     #fail if there is an error reading the checkpoint
-    #     try:
-    #         checkpoint = self._read_checkpoint()
-    #     except Exception as e:
-    #         L.error(f"Error reading checkpoint for {self.table_name}: {e}")
-    #         raise DeltaError(f"Error reading checkpoint: {e}")
-    #     if not checkpoint:
-    #         return 0
-    #     try:
-    #         return pc.max(checkpoint["elt_timestamp"]).as_py()
-    #     except Exception as e:
-    #         L.error(f"Error retrieving latest timestamp for {self.table_name}: {e}")
-    #         return 0
 
     def remove_log(self) -> bool:
         """Remove the Delta log.
@@ -205,31 +139,34 @@ class DeltaLog:
         if not isinstance(parquet["last_modified"], int) or parquet["last_modified"] <= 0:
             raise DeltaValidationError("Last modified timestamp must be a positive integer")
 
-    def _get_watermark_from_log(self) -> int:
+    def _get_watermark_from_log(self) -> dict[str, int]:
         """Get the latest watermark from the Delta log.
 
         Returns:
-            int: The latest timestamp, or 0 if no log exists
+            dict[str, int]: Dictionary containing the latest watermark and schema timestamp
         """
         if not self.table_exists():
-            return 0
+            return {"watermark": 0, "schema_timestamp": 0}
         try:
             #get the commit properties from the latest transaction
-            watermark = int(self.delta_log.history(1)[0]["watermark"])
+            history = self.delta_log.history(1)[0]
+            watermark = int(history["watermark"])
+            schema_timestamp = int(history["schema_timestamp"])
             #TODO Add a test here
             if watermark is None:
                 L.error(f"Watermark is None for {self.table_name}")
-                return -1
-            return watermark
+                return {"watermark": -1, "schema_timestamp": -1}
+            return {"watermark": watermark, "schema_timestamp": schema_timestamp}
         except Exception as e:
             L.error(f"Error retrieving latest timestamp from log for {self.table_name}: {e}")
-            return -1
+            return {"watermark": -1, "schema_timestamp": -1}
 
     def add_transaction(
         self, 
         parquets: List[Dict[str, Union[str, int]]], 
         schema: pa.Schema, 
         watermark: int,
+        schema_timestamp: int, 
         mode: Literal["append", "overwrite"] = DEFAULT_MODE,
     ) -> None:
         """Add a transaction to the Delta log.
@@ -249,7 +186,8 @@ class DeltaLog:
         if not parquets:
             raise DeltaValidationError("At least one parquet file must be provided")
 
-        self._log_exists()
+        if not self.table_exists():
+            self._log_exists()   
         actions = []
         for file in parquets:
             self._validate_parquet_info(file)
@@ -266,7 +204,7 @@ class DeltaLog:
 
         try:
             schema = Schema.from_arrow(schema)
-            commit_properties = CommitProperties(custom_metadata={"watermark": str(watermark)})
+            commit_properties = CommitProperties(custom_metadata={"watermark": str(watermark), "schema_timestamp": str(schema_timestamp)})
             if self.delta_log is None:
                 L.info(f"Creating new table: {self.table_name}")
                 create_table_with_add_actions(
@@ -282,10 +220,18 @@ class DeltaLog:
                 )
             else:
                 L.info(f"Adding to table: {self.table_name} - watermark: {watermark}")
+                
                 self.delta_log.create_write_transaction(
                     actions=actions, mode=mode, schema=schema, partition_by=[],
                     commit_properties=commit_properties
                 )
+                #This update is optional as it only refreshes the delta log reference. Will cause warning on fail but stops azure failure bringing down the pipeline
+                try:
+                    self.delta_log = DeltaTable(
+                    table_uri=self.log_uri, storage_options=self.storage_options
+                )
+                except:
+                    L.warning(f"Failed to update delta log for {self.table_name} after transaction")
         except Exception as e:
             L.error(f"Failed to add transaction for {self.table_name}: {e}")
             raise DeltaError(f"Failed to add transaction: {e}")

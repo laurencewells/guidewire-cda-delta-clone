@@ -44,7 +44,9 @@ class Batch:
             table_name=self.table_name,
             subfolder=subfolder,
         )
-        self.low_watermark = 0 if reset else self.log_entry._get_watermark_from_log()
+        self.watermark_info = self.log_entry._get_watermark_from_log()
+        self.low_watermark = 0 if reset else self.watermark_info["watermark"]
+        self.watermark_schema_timestamp = 0 if reset else self.watermark_info["schema_timestamp"]
         if reset:
             self.log_entry.remove_log()
 
@@ -75,17 +77,48 @@ class Batch:
                 L.warning(f"    Failed to read schema from {file_path_to_try}: {e}")
         return False
 
-    def _get_dir_list(self, directory: str) -> list[str]:
-        """Returns a list of directories within the given directory."""
-        # Filter directories based on the low watermark
-        return sorted(
-            [
-                path.path
-                for path in self.manifest.fs.get_file_info(directory)
-                if path.type == FileType.Directory
-                and int(path.base_name) > self.low_watermark
-            ]
+    def _get_dir_list(self, directory: str) -> tuple[bool, list[str]]:
+        """
+        Returns (is_part_way, directory_list).
+        is_part_way = True if part of the schema has been processed (i.e., only some dirs meet watermark criteria),
+        is_part_way = False if all or none meet criteria.
+        directory_list is always sorted.
+        """
+        # Get all directory paths within the given directory, sorted
+        
+        listed_paths = self.manifest.fs.get_file_info(directory)
+        full_list = sorted(
+            path.path
+            for path in listed_paths
+            if path.type == FileType.Directory
         )
+
+        # Filter for directories with base_name greater than the low watermark
+        part_list = sorted(
+            path.path 
+            for path in listed_paths 
+            if path.type == FileType.Directory
+            and int(path.base_name) > self.low_watermark
+        )
+
+        if not part_list:
+            L.info(
+                f"No directories found in {directory} greater than low watermark {self.low_watermark}"
+            )
+            return True, []
+
+        if 0 < len(part_list) < len(full_list):
+            L.info(
+                f"Filtered directories in {directory} to those with timestamps greater than low watermark {self.low_watermark}"
+            )
+            return True, part_list
+
+        # All present (or none filtered out)
+        L.info(
+            f"All directories in {directory} are greater than low watermark {self.low_watermark} (or none filtered out)"
+        )
+        return False, full_list
+
 
     def _get_parquet_list(self, directory: str) -> list[dict]:
         """Returns a list of parquet files with metadata from the given directory."""
@@ -121,13 +154,18 @@ class Batch:
             L.error(f"Failed to read parquet schema from {path}: {str(e)}")
             raise
 
-    def _process_schema_history_uri(self, folder: str):
-        """Processes a single schema history URI."""
+    def _process_schema_history(self, item: dict) -> None:
+        """Processes a single schema history item."""
+        folder = item["uri"]
+        schema_timestamp = item["schema_timestamp"]
         try:
-            timestamp_folders = self._get_dir_list(folder)
+            partial,timestamp_folders = self._get_dir_list(folder)
         except Exception as e:
             L.warning(f"Failed to list contents of {folder}: {e}")
             raise
+        if partial:
+            L.info(f"  Found partial schema history in {folder}, processing only new timestamps.")
+            
 
         first_folder_for_schema = True
         for timestamp_folder in timestamp_folders:
@@ -142,6 +180,8 @@ class Batch:
             except Exception as e:
                 L.error(f"  Failed to list contents of {timestamp_folder}: {e}")
                 continue
+            
+            #could use the full list lets see
 
             if first_folder_for_schema:
                 if self._schema_finder(files_in_timestamp):
@@ -150,7 +190,8 @@ class Batch:
                         parquets=files_in_timestamp,
                         schema=self.cached_schema,
                         watermark=timestamp_value,
-                        mode="overwrite",
+                        schema_timestamp=schema_timestamp,
+                        mode="overwrite" if not partial else "append",
                     )
                 else:
                     L.error(f"Schema not found for '{self.table_name} {folder}'")
@@ -160,6 +201,7 @@ class Batch:
                     parquets=files_in_timestamp,
                     schema=self.cached_schema,
                     watermark=timestamp_value,
+                    schema_timestamp=schema_timestamp,
                     mode="append",
                 )
 
@@ -179,6 +221,7 @@ class Batch:
         L.info(f"Processing batch for {self.table_name}")
         filepath = self.entry["dataFilesPath"].lstrip("s3://")
         schema_history = self.entry["schemaHistory"]
+        
 
         if not filepath or not schema_history:
             L.error(
@@ -188,15 +231,26 @@ class Batch:
 
         # Uses sorted to ensure the schema history is processed in order
         # makes sure to only process schema history entries that are greater than the low watermark
-        schema_history_list_uris = [
-            f"{filepath.rstrip('/')}/{key}/"
-            for key, value in sorted(schema_history.items())
-            if int(value) > self.low_watermark
+        # schema timestamp cannot be used here as its lower that the timestamp folders inside, its the orginal schema change time
+        # need to sort the schemas by the value not the key and take higher or equal than the self.watermark_schema_timestamp
+        sorted_schema_history = sorted(
+            (item for item in schema_history.items() if int(item[1]) >= self.watermark_schema_timestamp),
+            key=lambda kv: int(kv[1])
+        )
+
+        schema_history_list= [
+            {
+                "key": key,
+                "uri": f"{filepath.rstrip('/')}/{key}/",
+                "schema_timestamp": int(value)
+            }
+            for key, value in sorted_schema_history
         ]
+        
         try:
-            for folder in schema_history_list_uris:
-                L.info(f"Processing URI: {folder} for entry {self.table_name}")
-                self._process_schema_history_uri(folder)
+            for item in schema_history_list:
+                L.info(f"Processing URI: {item['uri']} for entry {self.table_name}")
+                self._process_schema_history(item)
             #self.log_entry.write_checkpoint(int(self.entry["lastSuccessfulWriteTimestamp"]))
         except Exception as e:
             L.error(f"Error processing schema history for {self.table_name}: {e} processing abandoned")
