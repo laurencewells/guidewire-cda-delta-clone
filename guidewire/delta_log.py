@@ -7,7 +7,7 @@ import pyarrow as pa
 from guidewire.logging import logger as L
 from guidewire.storage import Storage
 from typing import List, Dict, Optional, Union, Literal
-
+import os
 
 class DeltaError(Exception):
     """Base exception class for Delta-related errors."""
@@ -61,6 +61,8 @@ class DeltaLog:
         self.table_name = table_name
         self.fs = Storage(cloud="azure")
         self.storage_options = self.fs._storage_options
+        self.transaction_count = 0  # Track transactions for checkpointing
+        self.checkpoint_interval = os.getenv("DELTA_LOG_CHECKPOINT_INTERVAL", 100)
         self._log_exists()
 
     def _log_exists(self) -> None:
@@ -162,6 +164,25 @@ class DeltaLog:
             L.error(f"Error retrieving latest timestamp from log for {self.table_name}: {e}")
             return {"watermark": -1, "schema_timestamp": -1}
 
+    def _create_checkpoint(self) -> bool:
+        """Create a checkpoint for the Delta table to optimize log performance.
+        
+        Returns:
+            bool: True if checkpoint was created successfully, False otherwise
+        """
+        if not self.table_exists():
+            L.debug(f"Cannot create checkpoint - table {self.table_name} does not exist")
+            return False
+            
+        try:
+            L.debug(f"Creating checkpoint for table {self.table_name} at version {self.delta_log.version()}")
+            self.delta_log.create_checkpoint()
+            L.debug(f"Successfully created checkpoint for {self.table_name}")
+            return True
+        except Exception as e:
+            L.warning(f"Failed to create checkpoint for {self.table_name}: {e}")
+            return False
+
     def add_transaction(
         self, 
         parquets: List[Dict[str, Union[str, int]]], 
@@ -232,6 +253,13 @@ class DeltaLog:
                 except:
                     L.warning(f"Failed to update delta log for {self.table_name} after transaction, sleeping for some time")
                     sleep(10)
+                    
+            # Increment transaction counter and check for checkpoint
+            self.transaction_count += 1
+            if self.transaction_count % self.checkpoint_interval == 0:
+                L.debug(f"Reached {self.checkpoint_interval} transactions for {self.table_name}, creating checkpoint")
+                self._create_checkpoint()
+                
         except Exception as e:
             L.error(f"Failed to add transaction for {self.table_name}: {e}")
             raise DeltaError(f"Failed to add transaction: {e}")
