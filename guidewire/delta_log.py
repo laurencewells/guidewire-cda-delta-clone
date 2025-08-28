@@ -2,7 +2,7 @@ from time import sleep
 from deltalake.transaction import AddAction, create_table_with_add_actions,CommitProperties
 from deltalake.exceptions import TableNotFoundError
 from deltalake.schema import Schema
-from deltalake import DeltaTable
+from deltalake import DeltaTable, PostCommitHookProperties
 import pyarrow as pa
 from guidewire.logging import logger as L
 from guidewire.storage import Storage
@@ -62,7 +62,7 @@ class DeltaLog:
         self.fs = Storage(cloud="azure")
         self.storage_options = self.fs._storage_options
         self.transaction_count = 0  # Track transactions for checkpointing
-        self.checkpoint_interval = os.getenv("DELTA_LOG_CHECKPOINT_INTERVAL", 100)
+        self.checkpoint_interval = int(os.getenv("DELTA_LOG_CHECKPOINT_INTERVAL", 100))
         self._log_exists()
 
     def _log_exists(self) -> None:
@@ -227,8 +227,9 @@ class DeltaLog:
         try:
             schema = Schema.from_arrow(schema)
             commit_properties = CommitProperties(custom_metadata={"watermark": str(watermark), "schema_timestamp": str(schema_timestamp)})
+            post_commithook_properties = PostCommitHookProperties(create_checkpoint=False, cleanup_expired_logs=False)
             if self.delta_log is None:
-                L.debug(f"Creating new table: {self.table_name}")
+                L.debug(f"Creating new table: {self.table_name}")       
                 create_table_with_add_actions(
                     table_uri=self.log_uri,
                     schema=schema,
@@ -237,7 +238,9 @@ class DeltaLog:
                     partition_by=[],
                     name=self.table_name,
                     storage_options=self.storage_options,
-                    commit_properties= commit_properties
+                    commit_properties= commit_properties,
+                    post_commithook_properties=post_commithook_properties
+                    
 
                 )
             else:
@@ -245,7 +248,8 @@ class DeltaLog:
                 
                 self.delta_log.create_write_transaction(
                     actions=actions, mode=mode, schema=schema, partition_by=[],
-                    commit_properties=commit_properties
+                    commit_properties=commit_properties,
+                    post_commithook_properties=post_commithook_properties
                 )
                 #This update is optional as it only refreshes the delta log reference. Will cause warning on fail but stops azure failure bringing down the pipeline
                 try:
