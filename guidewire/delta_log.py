@@ -72,7 +72,7 @@ class DeltaLog:
         except Exception as e:
             #If its a file not found error, that is ok
             if isinstance(e, TableNotFoundError):
-                L.info(f"Log does not exist for {self.table_name}: {e}")
+                L.debug(f"Log does not exist for {self.table_name}: {e}")
             else:
                 L.error(f"Error reading log for {self.table_name}: {e}")
                 raise DeltaError(f"Error reading log: {e}")
@@ -207,7 +207,7 @@ class DeltaLog:
             schema = Schema.from_arrow(schema)
             commit_properties = CommitProperties(custom_metadata={"watermark": str(watermark), "schema_timestamp": str(schema_timestamp)})
             if self.delta_log is None:
-                L.info(f"Creating new table: {self.table_name}")
+                L.debug(f"Creating new table: {self.table_name}")
                 create_table_with_add_actions(
                     table_uri=self.log_uri,
                     schema=schema,
@@ -220,7 +220,7 @@ class DeltaLog:
 
                 )
             else:
-                L.info(f"Adding to table: {self.table_name} - watermark: {watermark}")
+                L.debug(f"Adding to table: {self.table_name} - watermark: {watermark}")
                 
                 self.delta_log.create_write_transaction(
                     actions=actions, mode=mode, schema=schema, partition_by=[],

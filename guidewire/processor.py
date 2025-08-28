@@ -4,8 +4,8 @@ import ray
 from guidewire.manifest import Manifest
 from guidewire.batch import Batch
 from guidewire.logging import logger as L
-
-
+from guidewire.results import Result
+from typing import Optional
 class Processor:
     """A class to handle table processing operations."""
     
@@ -38,6 +38,7 @@ class Processor:
                 self.table_names = [name for name in self.table_names if name not in exceptions]
         if self.table_names is None:
             raise ValueError("Table names must be provided")
+        self.results = []
 
     @staticmethod
     def _validate_environment() -> None:
@@ -55,7 +56,7 @@ class Processor:
 
     @staticmethod
     @ray.remote
-    def process_table_async(entry: str, manifest: Manifest, log_storage_account: str, log_storage_container: str, subfolder: str = None) -> None:
+    def process_table_async(entry: str, manifest: Manifest, log_storage_account: str, log_storage_container: str, subfolder: str = None) -> Optional[Result]:
         """
         Process a single table entry using Ray distributed computing.
         
@@ -64,12 +65,14 @@ class Processor:
             manifest: The manifest object containing table information
             log_storage_account: Azure storage account name
             log_storage_container: Azure storage container name
+            subfolder: Optional subfolder name
         """
+        batch_result = None
         try:
             L.info(f"Processing table: {entry}")
             manifest_entry = manifest.read(entry)
             if manifest_entry:
-                batch = Batch(
+                batch_result = Batch(
                     table_name=entry,
                     manifest=manifest,
                     storage_account=log_storage_account,
@@ -77,28 +80,35 @@ class Processor:
                     subfolder=subfolder,
                 ).process_batch()
                 L.info(f"Successfully processed table: {entry}")
+                return batch_result
             else:
                 L.warning(f"No manifest entry found for table: {entry}")
+                return None
         except Exception as e:
             L.error(f"Error processing table {entry}: {str(e)}")
-            raise
+            return batch_result
+
+
+            
         
     @staticmethod
-    def process_table(entry: str, manifest: Manifest, log_storage_account: str, log_storage_container: str, subfolder: str = None) -> None:
+    def process_table(entry: str, manifest: Manifest, log_storage_account: str, log_storage_container: str, subfolder: str = None) -> Optional[Result]:
         """
-        Process a single table entry using Ray distributed computing.
+        Process a single table entry sequentially (non-parallel).
         
         Args:
             entry: The table name to process
             manifest: The manifest object containing table information
             log_storage_account: Azure storage account name
             log_storage_container: Azure storage container name
+            subfolder: Optional subfolder name
         """
+        batch_result = None
         try:
             L.info(f"Processing table: {entry}")
             manifest_entry = manifest.read(entry)
             if manifest_entry:
-                batch = Batch(
+                batch_result = Batch(
                     table_name=entry,
                     manifest=manifest,
                     storage_account=log_storage_account,
@@ -106,33 +116,39 @@ class Processor:
                     subfolder=subfolder,
                 ).process_batch()
                 L.info(f"Successfully processed table: {entry}")
+                return batch_result
             else:
                 L.warning(f"No manifest entry found for table: {entry}")
+                return None
         except Exception as e:
             L.error(f"Error processing table {entry}: {str(e)}")
-            raise
+            return batch_result
+            
     
 
     def run(self) -> None:
         """Execute the table processing workflow."""
         try:
             if self.parallel:
-                # Initialize Ray for parallel processing
+                # Initialize Ray for parallel processing (tqdm_ray handles output properly)
                 ray.init(ignore_reinit_error=True, log_to_driver=True)
-                # Process tables in parallel
+                
+                # Process tables in parallel - each will show its own progress bars
                 futures = [
                     self.process_table_async.remote(entry, self.manifest, self.log_storage_account, self.log_storage_container, self.subfolder)
                     for entry in self.table_names
                 ]
+                
                 # Wait for all tasks to complete
-                ray.get(futures)
+                self.results = ray.get(futures)
                 ray.shutdown()
             else:
                 # Process tables sequentially
                 for entry in self.table_names:
-                    self.process_table(entry, self.manifest, self.log_storage_account, self.log_storage_container, self.subfolder)
-            L.info("Processed successfully")
+                    result = self.process_table(entry, self.manifest, self.log_storage_account, self.log_storage_container, self.subfolder)
+                    self.results.append(result)
         except Exception as e:
             L.error(f"Application error: {str(e)}")
-            ray.shutdown()
+            if hasattr(ray, 'is_initialized') and ray.is_initialized():
+                ray.shutdown()
             raise
