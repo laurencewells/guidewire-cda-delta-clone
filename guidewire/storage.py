@@ -33,7 +33,7 @@ class Storage:
             if not account_name:
                 raise KeyError("AZURE_STORAGE_ACCOUNT_NAME must be set")
             if client_id and client_secret and tenant_id:
-                L.info("Using Client ID and Client Secret for Azure storage")
+                L.debug("Using Client ID and Client Secret for Azure storage")
                 self._storage_options = {
                     "account_name": account_name,
                     "tenant_id": tenant_id,
@@ -44,7 +44,7 @@ class Storage:
                     account_name=self._storage_options["account_name"],
                 )
             elif account_key:
-                L.info("Using Account Key for Azure storage")
+                L.debug("Using Account Key for Azure storage")
                 self._storage_options = {
                     "account_name": account_name,
                     "account_key": account_key,
@@ -66,7 +66,7 @@ class Storage:
             if not all([region, access_key, secret_key]):
                 raise KeyError("AWS_REGION, AWS_ACCESS_KEY_ID, and AWS_SECRET_ACCESS_KEY must be set")
             if endpoint:
-                L.info(f"Using custom endpoint {endpoint} for AWS S3")
+                L.debug(f"Using custom endpoint {endpoint} for AWS S3")
                 self.filesystem = pa_fs.S3FileSystem(
                     region=region,
                     access_key=access_key,
@@ -74,7 +74,7 @@ class Storage:
                     endpoint_override=endpoint,
                 )  
             else:
-                L.info("Using default AWS S3 endpoint")
+                L.debug("Using default AWS S3 endpoint")
                 self.filesystem = pa_fs.S3FileSystem(
                     region=region,
                     access_key=access_key,
