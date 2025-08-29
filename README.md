@@ -127,7 +127,8 @@ Optional
 AZURE_STORAGE_SUBFOLDER = <azure-sub-folder>
 AWS_ENDPOINT_URL = <aws-endpoint-overwrite>
 RAY_DEDUP_LOGS = "0"
-DELTA_LOG_CHECKPOINT_INTERVAL = "100"
+DELTA_LOG_CHECKPOINT_INTERVAL = "100" - interval to update the log
+SHOW_TABLE_PROGRESS = "0" - disable the progress bars
 ```
 
 ## Key Components

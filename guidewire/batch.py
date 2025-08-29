@@ -1,3 +1,4 @@
+import os
 import pyarrow as pa
 from pyarrow.fs import FileType
 from guidewire.logging import logger as L
@@ -66,9 +67,12 @@ class Batch:
             errors=[],
             warnings=[]
         )
-        
-        # Determine which tqdm to use once at initialization
-        self._progress_bar = self._get_progress_bar_class()
+        if os.environ.get("SHOW_TABLE_PROGRESS") == "0":
+            self.show_progress = False
+            self._progress_bar = None
+        else:
+            self.show_progress = True
+            self._progress_bar = self._get_progress_bar_class()
 
     def _log_error(self, error_message: str) -> None:
         """Log an error message and add it to the result's errors list."""
@@ -224,11 +228,13 @@ class Batch:
             except ValueError:
                 L.warning(f"Skipping non-numeric timestamp folder: {folder}")
 
-                
-        # Create progress bar outside the loop
-        pbar = self._progress_bar(total=len(valid_timestamp_folders),
-                                 desc=f"Table: {self.table_name} Schema: {schema_timestamp}",
-                                 unit="folder")
+        # Initialize progress bar variable if there are more than 50 folders. Lower than this can kill the UI
+        pbar = None
+        if len(valid_timestamp_folders) > 50 and self.show_progress and self._progress_bar:
+            # Create progress bar outside the loop
+            pbar = self._progress_bar(total=len(valid_timestamp_folders),
+                                    desc=f"Table: {self.table_name} Schema: {schema_timestamp}",
+                                    unit="folder")
         
         try:
             for timestamp_folder in valid_timestamp_folders:
@@ -238,7 +244,8 @@ class Batch:
                     files_in_timestamp = self._get_parquet_list(timestamp_folder)
                 except Exception as e:
                     L.error(f"  Failed to list contents of {timestamp_folder}: {e}")
-                    pbar.update(1)
+                    if pbar:
+                        pbar.update(1)
                     continue
 
                 if first_folder_for_schema:
@@ -255,7 +262,8 @@ class Batch:
                     else:
                         error_message = f"Schema not found for '{self.table_name} {folder}'"
                         self._log_error(error_message)
-                        pbar.close()
+                        if pbar:
+                            pbar.close()
                         # Don't return here - let the caller handle the error
                         raise ValueError(error_message)
                 else:
@@ -272,10 +280,12 @@ class Batch:
                     process_finish_version=self.log_entry.delta_log.version() if self.log_entry.delta_log else 0
                 )
                 # Increment the progress bar
-                pbar.update(1)
+                if pbar:
+                    pbar.update(1)
         finally:
             # Close the progress bar at the end
-            pbar.close()
+            if pbar:
+                pbar.close()
 
 
     def process_batch(self) -> Result:
