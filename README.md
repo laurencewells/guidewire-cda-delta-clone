@@ -7,7 +7,7 @@ I have rewritten this to work using pyarrow, ray and delta-rs so it can run on a
 
 <img src=https://d1r5llqwmkrl74.cloudfront.net/notebooks/fsi/fs-lakehouse-logo-transparent.png width="600px">
 
-[![DBR](https://img.shields.io/badge/DBR-15.4_LTS_ML-red?logo=databricks&style=for-the-badge)](https://docs.databricks.com/release-notes/runtime/12.2.html)
+[![DBR](https://img.shields.io/badge/DBR-16.4_LTS_ML-red?logo=databricks&style=for-the-badge)](https://docs.databricks.com/release-notes/runtime/12.2.html)
 [![CLOUD](https://img.shields.io/badge/CLOUD-AWS-orange?style=for-the-badge)](https://databricks.com/try-databricks)
 [![CLOUD](https://img.shields.io/badge/CLOUD-Azure-blue?style=for-the-badge)](https://databricks.com/try-databricks)
 
@@ -79,18 +79,18 @@ guidewire-arrow/
 │   ├── delta_log.py      # Manages Delta Lake logs and checkpoints
 │   ├── processor.py      # Orchestrates the data processing workflow
 │   ├── storage.py        # Manages cloud storage operations (S3/Azure)
+│   ├── results.py        # Tracks processing results and metrics
+│   └── logging.py        # Logging configuration and utilities
 ├── main.py               # Entry point for the pipeline
 ├── requirements.txt      # Python dependencies
-├── .env                  # Environment variables
 ├── README.md             # Project documentation
-└── tests/                # Unit tests
 ```
 
 ## Installation
 
 ### Prerequisites
 
-- Python 3.8 or higher
+- Python 3.10 or higher
 - AWS and Azure credentials with appropriate permissions
 - `pip` for dependency management
 
@@ -126,6 +126,8 @@ AZURE_CLIENT_SECRET= <your-secret>
 Optional
 AZURE_STORAGE_SUBFOLDER = <azure-sub-folder>
 AWS_ENDPOINT_URL = <aws-endpoint-overwrite>
+RAY_DEDUP_LOGS = "0"
+DELTA_LOG_CHECKPOINT_INTERVAL = "100"
 ```
 
 ## Key Components
@@ -144,10 +146,42 @@ The Processor class in processor.py orchestrates the overall data processing wor
 ### Storage
 The Storage class in storage.py provides a unified interface for cloud storage operations across different providers (AWS S3 and Azure Blob Storage). It handles authentication, file operations, and storage-specific configurations, abstracting away the complexities of interacting with different cloud storage services. This component ensures consistent data access patterns regardless of the underlying storage platform.
 
+### Results
+The Results module in results.py provides comprehensive tracking and monitoring of processing operations. The `Result` dataclass captures detailed metrics including:
+
+- **Processing Timing**: Start and finish timestamps for each table processing operation
+- **Watermark Management**: Tracks data watermarks and schema timestamps throughout processing
+- **Version Control**: Records Delta Lake versions before and after processing
+- **Manifest Metrics**: Captures record counts and manifest watermarks
+- **Error Handling**: Collects and stores errors and warnings that occur during processing
+- **Progress Tracking**: Maintains lists of processed watermarks and schema changes
+
+This module enables comprehensive monitoring, debugging, and audit trails for data processing workflows, ensuring transparency and reliability in large-scale data operations.
+
+### Progress UI
+The system features an intelligent progress tracking interface that adapts to the execution environment:
+
+- **Adaptive Progress Bars**: Automatically detects whether Ray is initialized for distributed processing
+- **Ray Integration**: Uses `ray.experimental.tqdm_ray.tqdm` for proper progress display in distributed environments
+- **Fallback Support**: Falls back to standard `tqdm` for single-threaded or non-Ray environments
+- **Real-time Updates**: Provides live progress feedback during batch processing operations
+- **Error Integration**: Progress bars are integrated with the results tracking system for comprehensive monitoring
+
+The progress UI ensures users have clear visibility into processing status regardless of whether they're running single-threaded or distributed workloads.
+
 ## Dependencies
-Ray (v2.45.0): For distributed and parallel processing.
-DeltaLake (v0.25.1): For managing Delta Lake logs.
-PyArrow (v18.1.0): For efficient data processing.
+
+The project requires the following core dependencies:
+
+- **Ray (v2.45.0)**: For distributed and parallel processing
+- **DeltaLake (v1.1.4)**: For managing Delta Lake logs and operations
+- **PyArrow (v20.0.0)**: For efficient data processing and columnar operations
+- **tqdm (v4.67.0)**: For progress bars and monitoring
+- **pytest (v8.3.5)**: For testing framework
+- **setuptools (v80.9.0)**: For package building and distribution
+
+### Version Information
+- **Package Version**: 0.0.2
 
 ## Examples
 
@@ -160,6 +194,8 @@ processor = Processor(
     parallel=False
     table_names=["table1","table2"]
 )
+# Run the processing
+processor.run()
 
 ```
 
@@ -172,6 +208,43 @@ processor = Processor(
     parallel=True,  # This is the default setting
 )
 
+# Run the processing
+processor.run()
+
+# Access processing results
+for result in processor.results:
+    print(f"Table: {result.table}")
+    print(f"Processing time: {result.process_finish_time - result.process_start_time}")
+    print(f"Records from manifest: {result.manifest_records}")
+    print(f"Watermarks: {result.watermarks}")
+    if result.errors:
+        print(f"Errors encountered: {result.errors}")
+    if result.warnings:
+        print(f"Warnings: {result.warnings}")
+```
+
+### Working with Results
+```python
+from guidewire.processor import Processor
+from guidewire.results import Result
+
+# Process specific tables and capture detailed results
+processor = Processor(
+    table_names=("table1", "table2"),
+    parallel=False
+)
+processor.run()
+
+# Analyze results for monitoring and debugging
+for result in processor.results:
+    if result.errors:
+        print(f"❌ {result.table}: Failed with errors - {result.errors}")
+    elif result.warnings:
+        print(f"⚠️  {result.table}: Completed with warnings - {result.warnings}")
+    else:
+        print(f"✅ {result.table}: Successfully processed {result.manifest_records} records")
+        print(f"   - Version: {result.process_start_version} → {result.process_finish_version}")
+        print(f"   - Watermark: {result.process_start_watermark} → {result.process_finish_watermark}")
 ```
 
 ## Contributing
