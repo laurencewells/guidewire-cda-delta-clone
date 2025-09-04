@@ -1,5 +1,5 @@
 from guidewire.logging import logger as L
-from guidewire.storage import Storage
+from guidewire.storage import AWSStorage
 import os
 from typing import List, Optional, Dict, Any
 
@@ -25,7 +25,8 @@ class Manifest:
         
         self.location = location
         self.table_names = table_names
-        self.fs = Storage(cloud="aws")
+        # Use SOURCE prefix for manifest/data reading S3 credentials
+        self.fs = AWSStorage(prefix="SOURCE")
         self.manifest: Optional[Dict[str, List[Dict[str, Any]]]] = None
         self._initialize()
 
@@ -100,9 +101,17 @@ class Manifest:
             return None
 
         try:
-            json_object = self.manifest[entry][0].copy()  # Create a copy to avoid modifying the original
+            entry_data = self.manifest[entry]
+            # Handle PyArrow JSON conversion which may add extra nesting
+            if isinstance(entry_data[0], list):
+                # PyArrow converted structure: [[{...}]] -> get the dict
+                json_object = entry_data[0][0].copy()
+            else:
+                # Normal structure: [{...}] -> get the dict
+                json_object = entry_data[0].copy()
+            
             json_object["entry"] = entry
             return json_object
-        except (IndexError, KeyError) as e:
+        except (IndexError, KeyError, TypeError) as e:
             L.error(f"Error reading entry '{entry}' from manifest: {e}")
             return None

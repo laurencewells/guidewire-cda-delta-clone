@@ -90,8 +90,9 @@ guidewire-arrow/
 
 ### Prerequisites
 
-- Python 3.10 or higher
-- AWS and Azure credentials with appropriate permissions
+- Python 3.8 or higher
+- AWS and Azure credentials with appropriate permissions  
+- Docker and Docker Compose (for testing)
 - `pip` for dependency management
 
 
@@ -108,28 +109,68 @@ source venv/bin/activate
 3. Install Dependencies
 
 ```bash
-pip install -r requirements.txt
+pip install -e .
 ```
-4. Set up environment variables in a .env file: 
-``` 
-AWS_SECRET_ACCESS_KEY = <your-aws-secret-access-key> 
-AWS_ACCESS_KEY_ID = <your-aws-access-key-id>
-AWS_REGION = <your-aws-region>
-AWS_MANIFEST_LOCATION = <your-manifest-location>
-AZURE_STORAGE_ACCOUNT_NAME = <your-azure-storage-account-name>
-AZURE_STORAGE_ACCOUNT_CONTAINER_NAME = <your-azure-container-name>
-AZURE_STORAGE_ACCOUNT_KEY = <your-azure-storage-account-key>
-OR 
-AZURE_TENANT_ID = <your-tenant-id>
-AZURE_CLIENT_ID= <your-client-id>
-AZURE_CLIENT_SECRET= <your-secret>
-Optional
-AZURE_STORAGE_SUBFOLDER = <azure-sub-folder>
-AWS_ENDPOINT_URL = <aws-endpoint-overwrite>
-RAY_DEDUP_LOGS = "0"
-DELTA_LOG_CHECKPOINT_INTERVAL = "100" - interval to update the log
-SHOW_TABLE_PROGRESS = "0" - disable the progress bars
+
+4. Set up environment variables in a .env file:
+
+### Core Configuration
+```bash
+# Manifest location (required)
+AWS_MANIFEST_LOCATION=s3://your-bucket/manifest.json
+
+# Target cloud for delta tables (default: "azure") 
+DELTA_TARGET_CLOUD=azure  # or "aws"
 ```
+
+### Azure Target (Default)
+```bash
+AZURE_STORAGE_ACCOUNT_NAME=yourstorageaccount
+AZURE_STORAGE_ACCOUNT_CONTAINER=yourcontainer
+AZURE_STORAGE_SUBFOLDER=optional/subfolder  # Optional
+
+# Azure authentication (choose one method):
+# Method 1: Account Key
+AZURE_STORAGE_ACCOUNT_KEY=youraccountkey
+
+# Method 2: Service Principal  
+AZURE_TENANT_ID=yourtenant
+AZURE_CLIENT_ID=yourclientid
+AZURE_CLIENT_SECRET=yourclientsecret
+```
+
+### AWS S3 Target
+```bash
+# For cross-account or separate source/target configurations:
+# Source S3 (manifest/data reading)
+AWS_SOURCE_REGION=us-east-1
+AWS_SOURCE_ACCESS_KEY_ID=sourcekeyid
+AWS_SOURCE_SECRET_ACCESS_KEY=sourcesecretkey
+
+# Target S3 (delta table writing)
+AWS_TARGET_S3_BUCKET=your-delta-bucket
+AWS_TARGET_REGION=us-west-2  
+AWS_TARGET_ACCESS_KEY_ID=targetkeyid
+AWS_TARGET_SECRET_ACCESS_KEY=targetsecretkey
+
+# Or use shared credentials (backward compatible):
+AWS_REGION=us-east-1
+AWS_ACCESS_KEY_ID=youraccesskey
+AWS_SECRET_ACCESS_KEY=yoursecretkey
+AWS_S3_BUCKET=yourbucket
+```
+
+### Optional Configuration
+```bash
+RAY_DEDUP_LOGS=0                        # Disable duplicate ray logs
+DELTA_LOG_CHECKPOINT_INTERVAL=100       # Checkpoint interval
+SHOW_TABLE_PROGRESS=1                   # Enable progress bars
+AWS_ENDPOINT_URL=http://localhost:4566  # Custom S3 endpoint (LocalStack)
+```
+
+For detailed configuration examples, see:
+- [AWS S3 and Storage Configuration Guide](AWS_S3_STORAGE_GUIDE.md)
+- [Storage Setup Guide](STORAGE_SETUP.md)
 
 ## Key Components
 ### Manifest
@@ -178,41 +219,71 @@ The project requires the following core dependencies:
 - **DeltaLake (v1.1.4)**: For managing Delta Lake logs and operations
 - **PyArrow (v20.0.0)**: For efficient data processing and columnar operations
 - **tqdm (v4.67.0)**: For progress bars and monitoring
+
+### Development Dependencies
 - **pytest (v8.3.5)**: For testing framework
-- **setuptools (v80.9.0)**: For package building and distribution
+- **boto3 (v1.35.58)**: For S3 operations and testing
+- **requests (v2.32.3)**: For HTTP operations and testing
 
 ### Version Information
 - **Package Version**: 0.0.2
 
 ## Examples
 
-### Single-threaded Processing
+### Azure Target (Default)
 ```python
 from guidewire.processor import Processor
 
-# Create processor instance with single-threaded mode
+# Using Azure as target (default behavior)
 processor = Processor(
-    parallel=False
-    table_names=["table1","table2"]
+    target_cloud="azure",  # Default, can be omitted
+    table_names=["policy_holders", "claims"],
+    parallel=True
 )
-# Run the processing
 processor.run()
-
 ```
 
-### Parallel Processing
+### AWS S3 Target  
 ```python
 from guidewire.processor import Processor
 
-# Create processor instance with parallel processing (default) of all tables in the manifest
+# Using S3 as target cloud
 processor = Processor(
-    parallel=True,  # This is the default setting
+    target_cloud="aws",
+    table_names=["policy_holders", "claims"],
+    parallel=True
 )
+processor.run()
+```
 
-# Run the processing
+### Environment Variable Configuration
+```python
+import os
+from guidewire.processor import Processor
+
+# Set target via environment variable
+os.environ["DELTA_TARGET_CLOUD"] = "aws"
+
+# Processor will use environment variable
+processor = Processor(
+    table_names=["policy_holders"],
+    parallel=False
+)
+processor.run()
+```
+
+### Processing All Tables
+```python
+from guidewire.processor import Processor
+
+# Process all tables from manifest (table_names=None)
+processor = Processor(
+    target_cloud="azure",
+    parallel=True  # Process all tables in parallel
+)
 processor.run()
 
-# Access processing results
+# Access detailed results
 for result in processor.results:
     print(f"Table: {result.table}")
     print(f"Processing time: {result.process_finish_time - result.process_start_time}")
@@ -231,7 +302,8 @@ from guidewire.results import Result
 
 # Process specific tables and capture detailed results
 processor = Processor(
-    table_names=("table1", "table2"),
+    target_cloud="aws",
+    table_names=("policy_holders", "claims"),
     parallel=False
 )
 processor.run()
@@ -247,6 +319,38 @@ for result in processor.results:
         print(f"   - Version: {result.process_start_version} → {result.process_finish_version}")
         print(f"   - Watermark: {result.process_start_watermark} → {result.process_finish_watermark}")
 ```
+
+## Testing
+
+The project includes comprehensive integration testing with Docker Compose support:
+
+```bash
+# Install test dependencies
+make install-deps
+
+# Run all tests
+make test
+
+# Run specific test suites
+make test-s3        # S3/LocalStack integration tests
+make test-azure     # Azure/Azurite integration tests  
+make test-e2e       # End-to-end workflow tests
+
+# Start Docker services for manual testing
+make docker-up
+
+# Stop Docker services
+make docker-down
+```
+
+For detailed testing information, see [TESTING.md](TESTING.md).
+
+## Documentation
+
+- **[README.md](README.md)**: Main project documentation
+- **[AWS_S3_STORAGE_GUIDE.md](AWS_S3_STORAGE_GUIDE.md)**: AWS S3 and multi-cloud storage configuration guide
+- **[STORAGE_SETUP.md](STORAGE_SETUP.md)**: Local storage services with Docker Compose
+- **[TESTING.md](TESTING.md)**: Comprehensive testing guide
 
 ## Contributing
 Contributions are welcome! Please fork the repository and submit a pull request with your changes.

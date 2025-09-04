@@ -5,9 +5,9 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "guidewire-cda-delta-clone"
-version = "0.0.2"
+version = "0.0.4"
 dependencies = [
-    "pyarrow==20.0.0",
+    "pyarrow==21.0.0",
     "ray[default]==2.45.0",
     "deltalake==1.1.4",
     "tqdm==4.67.0",
@@ -15,9 +15,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = [
-    "pytest==8.3.5",
+test = [
+    "pytest==8.4.1",
+    "boto3==1.40.23",
+    "requests==2.32.3",
+    "azure-storage-blob==12.26.0",
 ]
 
+
 [tool.setuptools.packages.find]
-where = ["guidewire"]  # ["."] by default
+where = ["."]  # Look for packages in the root directory

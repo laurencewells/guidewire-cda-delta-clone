@@ -2,7 +2,7 @@ import os
 import pyarrow as pa
 from pyarrow.fs import FileType
 from guidewire.logging import logger as L
-from guidewire.delta_log import DeltaLog
+from guidewire.delta_log import AzureDeltaLog, AWSDeltaLog
 from guidewire.manifest import Manifest
 from typing import Optional
 from guidewire.results import Result
@@ -13,8 +13,9 @@ class Batch:
         self,
         table_name: str,
         manifest: Manifest,
-        storage_account: str,
-        storage_container: str,
+        target_cloud: str,
+        storage_or_s3_name: str,
+        storage_container: Optional[str],
         reset: bool = False,
         subfolder: Optional[str] = None,
     ):
@@ -23,8 +24,9 @@ class Batch:
         Args:
             table_name: Name of the table to process
             manifest: Manifest object containing file information
-            storage_account: Azure storage account name
-            storage_container: Azure storage container name
+            target_cloud: Target cloud provider for delta tables ("azure" or "aws")
+            storage_or_s3_name: Storage account name (Azure) or S3 bucket name (AWS)
+            storage_container: Storage container name (Azure only, None for AWS)
             reset: Whether to reset the processing state
             subfolder: Optional subfolder to process
         Raises:
@@ -32,21 +34,32 @@ class Batch:
         """
         if not table_name or not isinstance(table_name, str):
             raise ValueError("table_name must be a non-empty string")
-        if not storage_account or not isinstance(storage_account, str):
-            raise ValueError("storage_account must be a non-empty string")
-        if not storage_container or not isinstance(storage_container, str):
-            raise ValueError("storage_container must be a non-empty string")
+        if not target_cloud or not isinstance(target_cloud, str):
+            raise ValueError("target_cloud must be a non-empty string")
+        if not storage_or_s3_name or not isinstance(storage_or_s3_name, str):
+            raise ValueError("storage_or_s3_name must be a non-empty string")
+        if target_cloud == "azure" and (not storage_container or not isinstance(storage_container, str)):
+            raise ValueError("storage_container must be a non-empty string for Azure target cloud")
             
         self.table_name = table_name
         self.manifest = manifest
         self.entry = self.manifest.read(entry=self.table_name)
         self.cached_schema = None
-        self.log_entry = DeltaLog(
-            storage_account=storage_account,
-            storage_container=storage_container,
-            table_name=self.table_name,
-            subfolder=subfolder,
-        )
+        if target_cloud == "azure":
+            self.log_entry = AzureDeltaLog(
+                storage_account=storage_or_s3_name,
+                storage_container=storage_container,
+                table_name=self.table_name,
+                subfolder=subfolder,
+            )
+        elif target_cloud == "aws":
+            self.log_entry = AWSDeltaLog(
+                bucket_name=storage_or_s3_name,
+                table_name=self.table_name,
+                subfolder=subfolder,
+            )
+        else:
+            raise ValueError(f"Invalid target_cloud: {target_cloud}. Must be 'azure' or 'aws'")
         self.watermark_info = self.log_entry._get_watermark_from_log()
         self.low_watermark = 0 if reset else self.watermark_info["watermark"]
         self.watermark_schema_timestamp = 0 if reset else self.watermark_info["schema_timestamp"]

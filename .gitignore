@@ -208,3 +208,4 @@ __marimo__/
 *.local.json
 *.local.yaml
 .DS_Store
+testing/tmp/

@@ -11,7 +11,12 @@ TABLE_NAMES: Tuple[str, ...] = (
 
 def main() -> None:
     """Main entry point for the application."""
-    processor = Processor(table_names=TABLE_NAMES, parallel=False)
+    import os
+    
+    # Get target cloud from environment variable, default to "azure" for backward compatibility
+    target_cloud = os.environ.get("DELTA_TARGET_CLOUD", "azure")
+    
+    processor = Processor(target_cloud=target_cloud, table_names=TABLE_NAMES, parallel=False)
     processor.run()
 
 if __name__ == "__main__":
